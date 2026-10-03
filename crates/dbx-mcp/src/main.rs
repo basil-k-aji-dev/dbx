@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use dbx_mcp::{
     http::serve_streamable_http, with_legacy_discovery_fallback, DbxBackend, DbxMcpServer, LocalBackend, McpTransport,
-    RuntimeConfig, WebBackend,
+    RuntimeConfig, UnavailableBackend, WebBackend,
 };
 use rmcp::ServiceExt;
 
@@ -24,7 +24,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
     } else {
         let db_path = dbx_mcp::paths::storage_db_path().map_err(std::io::Error::other)?;
-        Arc::new(LocalBackend::open(&db_path).await.map_err(std::io::Error::other)?)
+        match LocalBackend::open(&db_path).await {
+            Ok(local) => Arc::new(local),
+            // Returning here would close stdout before the transport starts, so the
+            // client sees only EOF and this message stays on stderr. Serve the
+            // reason instead: every request fails closed and carries it.
+            Err(error) => {
+                eprintln!("Error: {error}");
+                Arc::new(UnavailableBackend::new(error))
+            }
+        }
     };
     match runtime.transport {
         McpTransport::Stdio => {
